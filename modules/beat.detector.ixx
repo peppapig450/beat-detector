@@ -13,9 +13,9 @@ namespace beat {
 
 class BeatDetector {
 public:
-  static constexpr std::uint32_t defaultBufferSize = 512U;
+  static constexpr std::uint32_t kDefaultBufferSize = 512U;
 
-  explicit BeatDetector(std::uint32_t buf_size                 = defaultBufferSize,
+  explicit BeatDetector(std::uint32_t buf_size                 = kDefaultBufferSize,
                         bool          enable_logging           = true,
                         bool          enable_performance_stats = true,
                         bool          enable_pitch_detection   = false,

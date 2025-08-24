@@ -60,7 +60,8 @@ CheckOptions:
 
   # Macros / constants
   - { key: readability-identifier-naming.MacroDefinitionCase,       value: UPPER_CASE }
-  - { key: readability-identifier-naming.ConstantCase,              value: camelBack }
+  - { key: readability-identifier-naming.ConstantCase,              value: CamelCase }
+  - { key: readability-identifier-naming.ConstantPrefix,            value: k}
 
   # Enumerators
   - { key: readability-identifier-naming.EnumConstantCase,          value: CamelCase }
