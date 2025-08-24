@@ -66,3 +66,4 @@ AllowShortCaseExpressionOnASingleLine: true
 BreakInheritanceList: BeforeComma
 PackConstructorInitializers: Never
 BreakConstructorInitializers: BeforeComma
+SeparateDefinitionBlocks: Always
