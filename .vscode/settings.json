@@ -1,0 +1,11 @@
+{
+    "clangd.arguments": [
+        "--clang-tidy",
+        "--import-insertions",
+        "--background-index",
+        "--all-scopes-completion",
+        "--malloc-trim",
+        "--log=verbose",
+        "--completion-style=detailed"
+    ]
+}
