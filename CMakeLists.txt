@@ -34,7 +34,7 @@ pkg_check_modules(AUBIO    REQUIRED IMPORTED_TARGET aubio)
 
 # --- Sources ---
 set(IMPL_SRCS
-  src/beat_detector.cpp
+  modules/beat.detector.impl.cpp
   # 'src/pw_audio_raii.hpp' is header-only, not compiled directly
 )
 set(MAIN_SRC src/main.cpp)
@@ -92,13 +92,12 @@ if(BUILD_LIBRARY)
   add_library(beat_detector SHARED ${IMPL_SRCS})
 
   # Our own headers (non-system) + external deps (system)
-  target_include_directories(beat_detector
-    PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
-    SYSTEM PRIVATE
-      ${PIPEWIRE_INCLUDE_DIRS}
-      ${AUBIO_INCLUDE_DIRS}
+  target_include_directories(beat_detector PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_include_directories(beat_detector SYSTEM PRIVATE
+    ${PIPEWIRE_INCLUDE_DIRS}
+    ${AUBIO_INCLUDE_DIRS}
   )
-
+  
   # Link pkg-config imported targets (modern CMake),
   # and keep SYSTEM includes to reduce external warning noise.
   target_link_libraries(beat_detector
@@ -118,7 +117,6 @@ if(BUILD_LIBRARY)
       PUBLIC
         FILE_SET cxx_modules TYPE CXX_MODULES BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/modules FILES
           modules/beat.detector.aubio_raii.ixx
-          modules/beat.detector.impl.cppm
           modules/beat.detector.ixx
           modules/beat.detector.pw_raii.ixx
     )

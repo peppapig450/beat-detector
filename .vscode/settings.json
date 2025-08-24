@@ -6,6 +6,14 @@
         "--all-scopes-completion",
         "--malloc-trim",
         "--log=verbose",
-        "--completion-style=detailed"
-    ]
+        "--completion-style=detailed",
+        "--experimental-modules-support",
+    ],
+    "cSpell.words": [
+        "aubio"
+    ],
+    "terminal.integrated.env.linux": {
+        "CC": "clang",
+        "CXX": "clang++",
+    }
 }
