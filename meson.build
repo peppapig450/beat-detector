@@ -74,21 +74,86 @@ endif
 add_project_arguments(extra_warns, language: 'cpp')
 
 # ---- Sources ----
-srcs = files(
+impl_srcs = files(
     'src/beat_detector.cpp',
-    'src/main.cpp',
+    # 'src/pw_audio_raii.hpp' is a header-only helper; not compiled directly
 )
 
-# ---- Executable ----
-exe = executable(
-    'beat_detector',
-    srcs,
-    include_directories: inc,
-    dependencies: [pipewire_dep, aubio_dep],
-    install: true,
-)
+main_src = files('src/main.cpp')
 
-# ---- Formatting helper (optional) ----
+# Probe snippet to test if the compiler really supports modules
+mod_probe = '''
+export module probe;
+export int x = 0;
+'''
+
+# Try "no extra flags" first; then GCC/old clang TS; then legacy MSVC
+candidate_args = [
+    [], # Modern Clang/MSVC
+    ['-fmodules-ts'], # GCC / older Clang (TS)
+    ['/experimental:module'], # older MSVC
+]
+
+filtered = []
+foreach args : candidate_args
+    if args.length() == 0 or cpp.get_supported_arguments(args).length() == args.length()
+        filtered += args
+    endif
+endforeach
+
+module_args = []
+foreach args : filtered
+    if cpp.compiles(mod_probe, name: 'c++20 modules support', args: args)
+        module_args = args
+        break
+    endif
+endforeach
+
+have_modules = module_args.length() > 0
+
+# If enabled install headers and build the shared lib; CLI links against it
+if get_option('build_library')
+    lib_srcs = impl_srcs
+
+    if get_option('build_module_wrapper') and have_modules
+        lib_srcs += files('modules/beat.detector.ixx')
+        add_project_arguments(module_args, language: 'cpp')
+    endif
+
+    beat_lib = shared_library(
+        'beat_detector',
+        lib_srcs,
+        include_directories: inc,
+        dependencies: [pipewire_dep, aubio_dep],
+        install: true,
+    )
+
+    install_subdir('include', install_dir: get_option('includedir'))
+endif
+
+if get_option('build_cli')
+    if get_option('build_library')
+        beat_cli = executable(
+            'beat_cli',
+            main_src,
+            include_directories: inc,
+            link_with: beat_lib,
+            dependencies: [pipewire_dep, aubio_dep],
+            install: true,
+        )
+    else
+        # No library: compile implementation into the CLI directly
+        beat_cli = executable(
+            'beat_cli',
+            [impl_srcs, main_src],
+            include_directories: inc,
+            dependencies: [pipewire_dep, aubio_dep],
+            install: true,
+        )
+    endif
+endif
+
+# ---- Formatting helper ----
 ffinder = find_program('clang-format', required: false)
 if ffinder.found()
     fmt = run_command(

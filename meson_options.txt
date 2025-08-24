@@ -1,0 +1,18 @@
+option(
+    'build_cli',
+    type: 'boolean',
+    value: true,
+    description: 'Build CLI (default)',
+)
+option(
+    'build_library',
+    type: 'boolean',
+    value: false,
+    description: 'Build and install shared library',
+)
+option(
+    'build_module_wrapper',
+    type: 'boolean',
+    value: false,
+    description: 'C++23 module wrapper (only with library)',
+)
