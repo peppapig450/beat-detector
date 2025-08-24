@@ -1,0 +1,66 @@
+Checks: >-
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  modernize-*,
+  performance-*,
+  readability-*,
+  misc-*,
+  portability-*,
+  cppcoreguidelines-avoid-c-arrays,
+  cppcoreguidelines-owning-memory,
+  security-*,
+  hicpp-use-override,
+  hicpp-explicit-conversions,
+  hicpp-signed-bitwise,
+  hicpp-no-assembler,
+  hicpp-vararg,
+  modernize-use-trailing-return-type
+  # keep explicit
+  misc-unused-parameters,
+  misc-definitions-in-headers,
+  # exclusions
+  -bugprone-easily-swappable-parameters,
+  -llvm-include-order,
+  -llvm-header-guard
+WarningsAsErrors: clang-analyzer-*
+FormatStyle: file
+HeaderFilterRegex: '^(src|include|lib|apps)/'
+
+CheckOptions:
+  # Keep your existing non-private member tweak
+  - key: misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic
+    value: true
+  
+  - key: llvm-prefer-auto-return-type
+    value: true
+
+  # Types
+  - { key: readability-identifier-naming.NamespaceCase,             value: lower_case }
+  - { key: readability-identifier-naming.ClassCase,                 value: CamelCase }
+  - { key: readability-identifier-naming.StructCase,                value: CamelCase }
+  - { key: readability-identifier-naming.EnumCase,                  value: CamelCase }
+  - { key: readability-identifier-naming.TypeAliasCase,             value: CamelCase }
+  - { key: readability-identifier-naming.TemplateParameterCase,     value: CamelCase }
+
+  # Functions (methods and free functions)
+  - { key: readability-identifier-naming.FunctionCase,              value: camelBack }
+  - { key: readability-identifier-naming.GlobalFunctionCase,        value: camelBack }
+
+  # Variables
+  - { key: readability-identifier-naming.VariableCase,              value: lower_case }
+  - { key: readability-identifier-naming.GlobalVariableCase,        value: camelBack }
+  - { key: readability-identifier-naming.LocalVariableCase,         value: lower_case }
+  - { key: readability-identifier-naming.ParameterCase,             value: lower_case }
+
+  # Members
+  - { key: readability-identifier-naming.MemberCase,                value: lower_case }
+  - { key: readability-identifier-naming.PrivateMemberCase,         value: lower_case }
+  - { key: readability-identifier-naming.PrivateMemberSuffix,       value: "_" }
+
+  # Macros / constants
+  - { key: readability-identifier-naming.MacroDefinitionCase,       value: UPPER_CASE }
+  - { key: readability-identifier-naming.ConstantCase,              value: camelBack }
+
+  # Enumerators
+  - { key: readability-identifier-naming.EnumConstantCase,          value: CamelCase }
