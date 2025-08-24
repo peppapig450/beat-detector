@@ -19,6 +19,9 @@ IncludeIsMainRegex: '([-_](test|unittest))?$'
 IncludeCategories:
   - Regex: '^".*"'
     Priority: 1
+    # This avoids clangd errors from aubio headers not importing the types they use
+  - Regex: '^<aubio/types\.h>'
+    Priority: 1
   - Regex: '^<pipewire/.*>'
     Priority: 2
   - Regex: '^<spa/.*>'
