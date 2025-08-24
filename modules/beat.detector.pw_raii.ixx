@@ -6,7 +6,7 @@ module;  // global module fragment to ensure C header are private to this unit
 
 #include <memory>
 
-module beat.detector:pw_raii;
+export module beat.detector:pw_raii;
 
 namespace pw_raii {
 

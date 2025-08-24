@@ -8,7 +8,7 @@ module;
 
 #include <memory>
 
-module beat.detector:aubio_raii;
+export module beat.detector:aubio_raii;
 
 namespace aubio_raii {
 

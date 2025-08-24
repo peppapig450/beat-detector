@@ -1,9 +1,13 @@
+module;
 #include <cstdint>
 #include <expected>
 #include <memory>
 #include <string>
 
 export module beat.detector;
+
+export import :aubio_raii;
+export import :pw_raii;
 
 namespace beat {
 
