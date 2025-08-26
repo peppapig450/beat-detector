@@ -15,7 +15,7 @@ class BeatDetector {
 public:
     static constexpr std::uint32_t kDefaultBufferSize = 512U;
 
-    explicit BeatDetector(std::uint32_t buf_size                 = kDefaultBufferSize,
+    explicit BeatDetector(std::uint32_t buffer_size              = kDefaultBufferSize,
                           bool          enable_logging           = true,
                           bool          enable_performance_stats = true,
                           bool          enable_pitch_detection   = false,
