@@ -54,6 +54,7 @@ function(setup_warnings target)
       -Wno-disabled-macro-expansion
       -Wno-weak-vtables
       -Wno-global-constructors
+      -fsafe-buffer-usage-suggestions
       -Wno-exit-time-destructors
       -Wno-unused-macros
       -Wno-gnu-anonymous-struct
