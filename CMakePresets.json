@@ -1,0 +1,15 @@
+{
+    "version": 6,
+    "configurePresets": [
+        {
+            "name": "clang21",
+            "displayName": "Clang 21",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "/usr/lib/llvm/21/bin/clang",
+                "CMAKE_CXX_COMPILER": "/usr/lib/llvm/21/bin/clang++"
+            }
+        }
+    ]
+}
