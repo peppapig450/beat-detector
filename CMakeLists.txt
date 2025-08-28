@@ -116,7 +116,11 @@ if(BUILD_LIBRARY)
     # switch them on manually if we truly need them.)
     target_sources(beat_detector
       PUBLIC
-        FILE_SET cxx_modules TYPE CXX_MODULES BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/modules FILES
+        FILE_SET cxx_modules TYPE CXX_MODULES 
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+          modules/audio.blocks.ixx
+          modules/audio.blocks.spa.ixx
           modules/beat.detector.aubio_raii.ixx
           modules/beat.detector.ixx
           modules/beat.detector.pw_raii.ixx
