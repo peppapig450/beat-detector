@@ -121,6 +121,7 @@ if(BUILD_LIBRARY)
         FILES
           modules/audio.blocks.ixx
           modules/audio.blocks.spa.ixx
+          modules/audio.blocks.core.ixx
           modules/beat.detector.aubio_raii.ixx
           modules/beat.detector.ixx
           modules/beat.detector.pw_raii.ixx

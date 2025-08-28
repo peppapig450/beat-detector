@@ -1,11 +1,12 @@
 module;
-#include <expected>
 #include <spa/buffer/buffer.h>
+
 #include <cstddef>
+#include <expected>
 
 export module audio.blocks:spa;
 
-import audio.blocks;
+import :core;
 
 namespace audio_blocks::detail {
 
@@ -34,13 +35,14 @@ namespace audio_blocks::detail {
 
 }  // namespace audio_blocks::detail
 
-export [[nodiscard]] inline auto
-makeBufferViewFromSpaMonoF32(const spa_buffer* buffer, std::size_t block_size_samples) noexcept
+export namespace audio_blocks {
+[[nodiscard]] inline auto makeBufferViewFromSpaMonoF32(const spa_buffer* buffer,
+                                                       std::size_t block_size_samples) noexcept
     -> std::expected<audio_blocks::BufferView<float>, audio_blocks::ViewError> {
     using namespace audio_blocks::detail;
     using enum audio_blocks::ViewError;
 
-    const void* data_ptr = spaDataPtr(buffer);
+    const void* data_ptr   = spaDataPtr(buffer);
     const auto  byte_count = spaSizeBytes(buffer);
     const auto  stride     = spaStrideBytes(buffer, sizeof(float));
 
@@ -48,16 +50,16 @@ makeBufferViewFromSpaMonoF32(const spa_buffer* buffer, std::size_t block_size_sa
         return std::unexpected {NullData};
     }
     if (block_size_samples == 0) {
-        return std::unexpected{ZeroBlockSize};
+        return std::unexpected {ZeroBlockSize};
     }
     if (stride != sizeof(float)) {
-        return std::unexpected{UnsupportedStride};
+        return std::unexpected {UnsupportedStride};
     }
     if ((byte_count % sizeof(float)) != 0U) {
-        return std::unexpected{MisalignedBytes};
+        return std::unexpected {MisalignedBytes};
     }
-
 
     return audio_blocks::makeBufferViewFromBytes<float>(data_ptr, byte_count, block_size_samples);
 }
 
+}  // namespace audio_blocks
