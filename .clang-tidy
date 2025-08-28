@@ -22,7 +22,8 @@ Checks: >-
   # exclusions
   -bugprone-easily-swappable-parameters,
   -llvm-include-order,
-  -llvm-header-guard
+  -llvm-header-guard,
+  -bugprone-easily-swappable-parameters
 WarningsAsErrors: clang-analyzer-*
 FormatStyle: file
 HeaderFilterRegex: '^(src|include|lib|apps)/'
