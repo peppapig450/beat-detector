@@ -1,0 +1,605 @@
+module;
+#include "../include/utf8_format.hpp"
+#include <aubio/types.h>
+
+#include <aubio/fvec.h>
+#include <aubio/onset/onset.h>
+#include <aubio/pitch/pitch.h>
+#include <aubio/tempo/tempo.h>
+#include <pipewire/context.h>
+#include <pipewire/core.h>
+#include <pipewire/keys.h>
+#include <pipewire/main-loop.h>
+#include <pipewire/pipewire.h>
+#include <pipewire/port.h>
+#include <pipewire/stream.h>
+#include <spa/param/audio/format.h>
+#include <spa/param/audio/raw-utils.h>
+#include <spa/param/param.h>
+#include <spa/pod/builder.h>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <expected>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <memory>
+#include <numeric>
+#include <print>
+#include <ranges>
+#include <ratio>
+#include <string_view>
+#include <vector>
+
+module beat.detector;
+
+import :aubio_raii;
+import :pw_raii;
+import audio.blocks;
+
+using namespace pw_raii;
+using namespace aubio_raii;
+
+namespace beat {
+
+namespace {
+
+constexpr std::uint32_t kSampleRate = 44100U;  // REVIEW: Configurable?
+constexpr std::uint32_t kChannels   = 1U;
+
+namespace icons {
+
+constexpr std::u8string_view kStats   = u8"\U0000E64d";  // 
+constexpr std::u8string_view kRuntime = u8"\U0001F3EB";  // 󱎫
+constexpr std::u8string_view kNote    = u8"\uf025";      // 
+
+constexpr std::u8string_view kBolt      = u8"\u26A1";      // ⚡
+constexpr std::u8string_view kUpChart   = u8"\U0001F4C8";  // 📈
+constexpr std::u8string_view kDownChart = u8"\U0001F4C9";  // 📉
+
+constexpr std::u8string_view kBpm    = u8"\uf75a";  // 󰝚
+constexpr std::u8string_view kCheck  = u8"\uf14a";  // 
+constexpr std::u8string_view kCircle = u8"\ueaaf";  // 
+constexpr std::u8string_view kFail   = u8"\uf467";  // 
+
+constexpr std::u8string_view kMusic = u8"\uf001";  // 
+constexpr std::u8string_view kBlock = u8"\u2588";  // █
+constexpr std::u8string_view kLight = u8"\u2591";  // ░
+
+constexpr std::u8string_view kPitch = u8"\U000F05C5";  // 󰗅
+}  // namespace icons
+
+void featureLine(std::string_view label, bool enabled, std::u8string_view icon) {
+    auto u8_icon = u8fmt::wrapU8string(icon);
+    std::print("\t{} {}: {}\n",
+               u8_icon,
+               label,
+               enabled ? u8fmt::wrapU8string(icons::kCheck) : u8fmt::wrapU8string(icons::kFail));
+}
+
+namespace pw {
+
+constexpr auto iconFor(pw_stream_state state) noexcept -> u8fmt::U8StringViewWrapper {
+    constexpr auto wrap = u8fmt::wrapU8string;
+
+    // clang-format off
+    switch (state) {
+        case PW_STREAM_STATE_CONNECTING:  return wrap(u8"\U000F0119"); // 󰄙
+        case PW_STREAM_STATE_PAUSED:      return wrap(u8"\uf04c");     // 
+        case PW_STREAM_STATE_STREAMING:   return wrap(u8"\U000F076A"); // 󰝚
+        case PW_STREAM_STATE_ERROR:       return wrap(u8"\uf46f");     // 
+        case PW_STREAM_STATE_UNCONNECTED: return wrap(u8"\uead0");     // 
+        default:                          return wrap(u8"\U000F0453"); // 󰑓
+    }
+    // clang-format on
+}
+
+}  // namespace pw
+
+}  // namespace
+
+class DetectorState {
+public:
+    pw_raii::MainLoopPtr main_loop {nullptr};
+    pw_raii::ContextPtr  context {nullptr};
+    pw_raii::CorePtr     core {nullptr};
+    pw_raii::StreamPtr   stream {nullptr};
+
+    aubio_raii::TempoPtr tempo {nullptr};
+    aubio_raii::FVecPtr  input_vector {nullptr};
+    aubio_raii::FVecPtr  output_vector {nullptr};
+    aubio_raii::OnsetPtr onset {nullptr};
+    aubio_raii::PitchPtr pitch {nullptr};
+    aubio_raii::FVecPtr  pitch_buffer {nullptr};
+
+    // TODO: maybe make this private
+    const std::uint32_t buffer_size;
+    const std::uint32_t fft_size;
+    bool                log_enabled;
+    bool                stats_enabled;
+    bool                pitch_enabled;
+    bool                visual_enabled;
+
+    std::ofstream                         log;
+    std::vector<double>                   processing_times_ms;
+    std::uint64_t                         total_beats {0}, total_onsets {0};
+    std::chrono::steady_clock::time_point start, last_beat;
+    float                                 last_bpm {0.F};
+
+    static constexpr std::size_t kBPMCapacity = 10U;
+
+    struct BPMBuffer {
+        std::array<float, kBPMCapacity> values {};
+        std::size_t                     count {0U};
+        std::size_t                     head {0U};
+    };
+
+    BPMBuffer bpm {};
+
+    inline static std::atomic_bool quit {false};
+    inline static DetectorState*   instance {nullptr};
+
+    DetectorState(std::uint32_t buffer_size_in,
+                  bool          enable_logging,
+                  bool          enable_stats,
+                  bool          enable_pitch_detection,
+                  bool          enable_visualization)
+        : buffer_size(buffer_size_in)
+        , fft_size(buffer_size_in * 2)
+        , log_enabled(enable_logging)
+        , stats_enabled(enable_stats)
+        , pitch_enabled(enable_pitch_detection)
+        , visual_enabled(enable_visualization) {
+        instance = this;
+        start    = std::chrono::steady_clock::now();
+    }
+
+    ~DetectorState() {
+        instance = nullptr;
+    }
+};
+
+// PIMPL
+struct BeatDetector::Impl {
+    std::unique_ptr<DetectorState> state;
+};
+
+BeatDetector::BeatDetector(std::uint32_t buffer_size,
+                           bool          enable_logging,
+                           bool          enable_performance_stats,
+                           bool          enable_pitch_detection,
+                           bool          enable_visual_feedback)
+    : impl_(std::make_unique<Impl>()) {
+    impl_->state = std::make_unique<DetectorState>(buffer_size,
+                                                   enable_logging,
+                                                   enable_performance_stats,
+                                                   enable_pitch_detection,
+                                                   enable_visual_feedback);
+}
+
+BeatDetector::~BeatDetector() {
+    auto& current_state = *impl_->state;
+    if (current_state.stats_enabled) {
+        const auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                                  std::chrono::steady_clock::now() - current_state.start)
+                                  .count();
+        std::println("\n{} Final Statistics:", u8fmt::wrapU8string(icons::kStats));
+        std::println("\t{} Total runtime: {} seconds",
+                     u8fmt::wrapU8string(icons::kRuntime),
+                     duration);
+        std::println("\t{} Total beat detected: {}",
+                     u8fmt::wrapU8string(icons::kNote),
+                     current_state.total_beats);
+        std::println("\t{} Total onsets detected: {}",
+                     u8fmt::wrapU8string(icons::kNote),
+                     current_state.total_onsets);
+    }
+
+    if (!current_state.processing_times_ms.empty()) {
+        const auto [min_processing_it, max_processing_it] =
+            std::ranges::minmax_element(current_state.processing_times_ms);
+        const double average_processing_time =
+            std::accumulate(current_state.processing_times_ms.begin(),
+                            current_state.processing_times_ms.end(),
+                            0.0)
+            / static_cast<double>(current_state.processing_times_ms.size());
+
+        std::println("\t{} Average processing time: {:.3F} ms",
+                     u8fmt::wrapU8string(icons::kBolt),
+                     average_processing_time);
+        std::println("\t{} Max processing time: {:.3F} ms",
+                     u8fmt::wrapU8string(icons::kUpChart),
+                     *max_processing_it);
+        std::println("\t{} Min processing time: {:.3F} ms",
+                     u8fmt::wrapU8string(icons::kDownChart),
+                     *min_processing_it);
+    }
+
+    if (auto& state_bpm = current_state.bpm; state_bpm.count > 0) {
+        auto index_range = std::views::iota(std::size_t {0}, state_bpm.count);
+
+        auto bpm_value_view = index_range | std::views::transform([&state_bpm](std::size_t index) {
+                                  const std::size_t capacity = DetectorState::kBPMCapacity;
+                                  const std::size_t first_index =
+                                      (state_bpm.head + capacity - state_bpm.count) % capacity;
+                                  return state_bpm.values[(first_index + index) % capacity];
+                              });
+
+        const float total_bpm = std::accumulate(bpm_value_view.begin(), bpm_value_view.end(), 0.0F);
+        const float average_bpm = total_bpm / static_cast<float>(state_bpm.count);
+
+        std::println("\t{} Final average BPM: {:.1F}",
+                     u8fmt::wrapU8string(icons::kBpm),
+                     average_bpm);
+    }
+
+    if (current_state.log.is_open()) {
+        current_state.log.close();
+    }
+    pw_deinit();
+    std::println("\n{} Cleanup complete - All resources freed!",
+                 u8fmt::wrapU8string(icons::kCheck));
+}
+
+[[nodiscard]] static auto averageBpm(const DetectorState& state) {
+    const auto& state_bpm = state.bpm;
+
+    if (state.bpm.count == 0) {
+        return 0.0F;
+    }
+
+    const auto bpm_value_view = std::views::iota(std::size_t {0}, state_bpm.count)
+                                | std::views::transform([&](std::size_t index) {
+                                      const std::size_t capacity = DetectorState::kBPMCapacity;
+                                      const std::size_t first_index =
+                                          (state_bpm.head + capacity - state_bpm.count) % capacity;
+                                      return state_bpm.values[(first_index + index) % capacity];
+                                  });
+
+    const float total_bpm   = std::accumulate(bpm_value_view.begin(), bpm_value_view.end(), 0.0F);
+    const float average_bpm = total_bpm / static_cast<float>(state_bpm.count);
+    return average_bpm;
+}
+
+auto BeatDetector::initialize() -> std::expected<void, std::string> {
+    auto& current_state = *impl_->state;
+    pw_init(nullptr, nullptr);
+
+    if (current_state.log_enabled) {
+        const auto current_time     = std::chrono::system_clock::now();
+        const auto utc_current_time = std::chrono::clock_cast<std::chrono::utc_clock>(current_time);
+
+        const std::filesystem::path log_file =
+            std::format("beat_log_{:%Y%m%d_%H%M%S}Z.txt", utc_current_time);
+        current_state.log.open(log_file, std::ios::out | std::ios::trunc);
+
+        if (!current_state.log.is_open()) {
+            return std::unexpected("failed to open log file");
+        }
+
+        std::println("{} Logging to: {}", u8fmt::wrapU8string(icons::kCircle), log_file.string());
+        std::println(current_state.log, "# Beat Detection Log - {:%F %T}", utc_current_time);
+        std::println(current_state.log, "# Timestamp,BPM,Onset,Pitch(Hz),ProcessTime(ms)");
+    }
+
+    current_state.main_loop.reset(pw_main_loop_new(nullptr));
+    if (current_state.main_loop == nullptr) {
+        return std::unexpected("failed to create main loop");
+    }
+
+    current_state.context.reset(
+        pw_context_new(pw_main_loop_get_loop(current_state.main_loop.get()), nullptr, 0));
+    if (current_state.context == nullptr) {
+        return std::unexpected("failed to create context");
+    }
+
+    current_state.core.reset(pw_context_connect(current_state.context.get(), nullptr, 0));
+    if (current_state.core == nullptr) {
+        return std::unexpected("failed to connect to PipeWire");
+    }
+
+    current_state.tempo.reset(
+        new_aubio_tempo("default", current_state.fft_size, current_state.buffer_size, kSampleRate));
+    if (current_state.tempo == nullptr) {
+        return std::unexpected("failed to create aubio tempo");
+    }
+
+    current_state.input_vector.reset(new_fvec(current_state.buffer_size));
+    current_state.output_vector.reset(new_fvec(1U));
+    if (current_state.input_vector == nullptr || current_state.output_vector == nullptr) {
+        return std::unexpected("failed to create aubio buffers");
+    }
+
+    // TODO: not entirely sure these parameters are correct, double check
+    current_state.onset.reset(
+        new_aubio_onset("default", current_state.fft_size, current_state.buffer_size, kSampleRate));
+    if (current_state.onset == nullptr) {
+        return std::unexpected("failed to create aubio onset");
+    }
+
+    if (current_state.pitch_enabled) {
+        current_state.pitch.reset(new_aubio_pitch("default",
+                                                  current_state.fft_size,
+                                                  current_state.buffer_size,
+                                                  kSampleRate));
+        current_state.pitch_buffer.reset(new_fvec(1U));
+
+        if (current_state.pitch == nullptr || current_state.pitch_buffer == nullptr) {
+            return std::unexpected("failed to create aubio pitch");
+        }
+        aubio_pitch_set_unit(current_state.pitch.get(), "Hz");
+    }
+
+    const pw_stream_events
+        events {.version = PW_VERSION_STREAM_EVENTS,  // behave clang-format
+                .destroy = nullptr,
+
+                // Force the lambda to decay to a function pointer with +[] (needed for C callback)
+                .state_changed = +[](void* userdata,
+                                     pw_stream_state /*old*/,
+                                     pw_stream_state state,
+                                     const char*     error) noexcept -> void {
+                    auto* event_state = static_cast<DetectorState*>(userdata);
+
+                    std::println("{} Stream state: {}",
+                                 pw::iconFor(state),
+                                 pw_stream_state_as_string(state));
+
+                    if (state == PW_STREAM_STATE_ERROR) {
+                        std::println(std::cerr,
+                                     "{} Stream error: {}",
+                                     u8fmt::wrapU8string(icons::kFail),
+                                     error ? error : "unknown");
+                        if (event_state != nullptr && event_state->main_loop != nullptr) {
+                            pw_main_loop_quit(event_state->main_loop.get());
+                        }
+                    }
+                },
+                .control_info  = nullptr,
+                .io_changed    = nullptr,
+                .param_changed = nullptr,
+                .add_buffer    = nullptr,
+                .remove_buffer = nullptr,
+
+                .process = +[](void* userdata) noexcept -> void {
+                    using Clock = std::chrono::steady_clock;
+
+                    auto* process_state = static_cast<DetectorState*>(userdata);
+                    if (process_state == nullptr) {
+                        return;
+                    }
+
+                    if (DetectorState::instance != nullptr) {
+                        beat::DetectorState::quit.store(false, std::memory_order_relaxed);
+                    }
+                    if (beat::DetectorState::quit.load(std::memory_order_relaxed)) {
+                        return;
+                    }
+
+                    const auto starting_time = Clock::now();
+
+                    if (auto* pw_buf = pw_stream_dequeue_buffer(process_state->stream.get());
+                        pw_buf) {
+                        // Make sure we always re-queue the buffer , even on early returns
+                        struct BufferLease {
+                            pw_stream* stream {};
+                            pw_buffer* buffer {};
+
+                            ~BufferLease() {
+                                if (stream != nullptr && buffer != nullptr) {
+                                    pw_stream_queue_buffer(stream, buffer);
+                                }
+                            }
+                        } lease {.stream = process_state->stream.get(), .buffer = pw_buf};
+
+                        if (auto* spa_buf = pw_buf->buffer; spa_buf != nullptr
+                                                            && spa_buf->datas[0].data != nullptr
+                                                            && spa_buf->datas[0].chunk != nullptr) {
+
+                            auto process_view = [&](const audio_blocks::BufferView<float>& view)
+                                -> std::expected<void, audio_blocks::ViewError> {
+                                for (auto block : view.blocks()) {
+                                    auto* destination =
+                                        fvec_get_data(process_state->input_vector.get());
+
+                                    std::ranges::copy(block, destination);
+
+                                    aubio_tempo_do(process_state->tempo.get(),
+                                                   process_state->input_vector.get(),
+                                                   process_state->output_vector.get());
+                                    const bool is_beat =
+                                        process_state->output_vector->data[0] != 0.0F;
+
+                                    aubio_onset_do(process_state->onset.get(),
+                                                   process_state->input_vector.get(),
+                                                   process_state->output_vector.get());
+                                    const bool is_onset =
+                                        process_state->output_vector->data[0] != 0.0F;
+
+                                    float pitch_hz = 0.0F;
+                                    if (process_state->pitch_enabled) {
+                                        aubio_pitch_do(process_state->pitch.get(),
+                                                       process_state->input_vector.get(),
+                                                       process_state->pitch_buffer.get());
+                                        pitch_hz = process_state->pitch_buffer->data[0];
+                                    }
+
+                                    if (is_beat) {
+                                        ++process_state->total_beats;
+                                        process_state->last_bpm =
+                                            aubio_tempo_get_bpm(process_state->tempo.get());
+                                        process_state->last_beat = Clock::now();
+
+                                        auto& bpm_buffer = process_state->bpm;
+                                        bpm_buffer.values[bpm_buffer.head] =
+                                            process_state->last_bpm;
+                                        bpm_buffer.head =
+                                            (bpm_buffer.head + 1) % DetectorState::kBPMCapacity;
+                                        bpm_buffer.count = std::min(bpm_buffer.count + 1,
+                                                                    DetectorState::kBPMCapacity);
+
+                                        if (process_state->visual_enabled) {
+                                            const auto intensity =
+                                                std::clamp(static_cast<int>(process_state->last_bpm
+                                                                            / 20.0F),
+                                                           0,
+                                                           10);
+                                            std::print("\r{}", u8fmt::wrapU8string(icons::kMusic));
+                                            for (int i = 0; i < intensity; ++i) {
+                                                std::print("{}",
+                                                           u8fmt::wrapU8string(icons::kBlock));
+                                            }
+                                            for (int i = 0; i < 10; ++i) {
+                                                std::print("{}",
+                                                           u8fmt::wrapU8string(icons::kLight));
+                                            }
+                                            std::print(" BPM: {:.1f} | Avg {:.1f}",
+                                                       process_state->last_bpm,
+                                                       averageBpm(*process_state));
+                                            std::fflush(stdout);
+                                        } else {
+                                            std::println(" BPM: {:.1f}", process_state->last_bpm);
+                                        }
+                                    }
+
+                                    if (is_onset) {
+                                        ++process_state->total_onsets;
+                                    }
+
+                                    if (process_state->log_enabled && process_state->log.is_open()
+                                        && (is_beat || is_onset)) {
+                                        const auto current_time = std::chrono::system_clock::now();
+                                        const auto current_time_ms =
+                                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                current_time.time_since_epoch())
+                                            % 1000;
+
+                                        std::println(process_state->log,
+                                                     "{:%T}.{:03},{:.1f},{},{:.3f},",
+                                                     current_time,
+                                                     static_cast<int>(current_time_ms.count()),
+                                                     (is_beat ? process_state->last_bpm : 0.0F),
+                                                     is_onset ? 1 : 0,
+                                                     pitch_hz);
+                                    }
+                                }
+                                return {};  // success
+                            };
+
+                            // Build a single bounded view over the whole SPA buffer
+                            [[maybe_unused]] auto view_res =
+                                audio_blocks::makeBufferViewFromSpaMonoF32(spa_buf,
+                                                                           process_state
+                                                                               ->buffer_size)
+                                    .and_then(process_view)
+                                    .or_else([&](audio_blocks::ViewError error)
+                                                 -> std::expected<void, audio_blocks::ViewError> {
+                                        std::println(stderr,
+                                                     "SPA buffer rejected: {}",
+                                                     audio_blocks::toString(error));
+                                        return std::unexpected {error};
+                                    });
+                        }
+                    }
+
+                    if (process_state->stats_enabled) {
+                        const auto   end_time = Clock::now();
+                        const double end_time_ms =
+                            std::chrono::duration<double, std::milli>(end_time - starting_time)
+                                .count();
+
+                        if (process_state->log.is_open()
+                            && (process_state->total_beats || process_state->total_onsets)) {
+                            std::println(process_state->log, "{:.3f}", end_time_ms);
+                        }
+
+                        if (process_state->processing_times_ms.size() < 1000) {
+                            process_state->processing_times_ms.push_back(end_time_ms);
+                        }
+                    }
+                },
+
+                .drained      = nullptr,
+                .command      = nullptr,
+                .trigger_done = nullptr};
+
+    auto properties = pw_raii::makeAudioCaptureProperties();
+
+    current_state.stream.reset(
+        pw_stream_new_simple(pw_main_loop_get_loop(current_state.main_loop.get()),
+                             "beat-detector",
+                             properties.get(),
+                             &events,
+                             &current_state));
+
+    if (current_state.stream == nullptr) {
+        return std::unexpected("failed to create stream");
+    }
+
+    std::array<std::uint8_t, 1024> buffer {};
+    spa_pod_builder                builder = SPA_POD_BUILDER_INIT(buffer.data(), buffer.size());
+
+    spa_audio_info_raw audio_info {};
+    audio_info.format   = SPA_AUDIO_FORMAT_F32_LE;  // REVIEW: might want to make this portable
+    audio_info.channels = kChannels;
+    audio_info.rate     = kSampleRate;
+    audio_info.flags    = 0;
+
+    auto params = std::to_array<const spa_pod*>(
+        {spa_format_audio_raw_build(&builder, SPA_PARAM_EnumFormat, &audio_info)});
+
+    if (pw_stream_connect(current_state.stream.get(),
+                          PW_DIRECTION_INPUT,
+                          PW_ID_ANY,
+                          static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT
+                                                       | PW_STREAM_FLAG_MAP_BUFFERS
+                                                       | PW_STREAM_FLAG_RT_PROCESS),
+                          params.data(),
+                          params.size())
+        < 0) {
+        return std::unexpected("failed to connect to stream");
+    }
+
+    return {};
+}
+
+void BeatDetector::run() {
+    auto& current_state = *impl_->state;
+    if (current_state.main_loop == nullptr) {
+        return;
+    }
+
+    std::println("\n{} Beat Detector Started!", u8fmt::wrapU8string(icons::kBpm));
+    std::println("\t Buffer size: {} samples", current_state.buffer_size);
+    std::println("\tSample rate: {} Hz", kSampleRate);
+    std::println("\tFeatures enabled:");
+
+    featureLine("Logging", current_state.log_enabled, icons::kCircle);
+    featureLine("Performance", current_state.stats_enabled, icons::kStats);
+    featureLine("Pitch", current_state.pitch_enabled, icons::kPitch);
+    featureLine("Visual", current_state.visual_enabled, icons::kCircle);
+
+    std::println("\n{} Listening for beats... Press Ctrl+C to stop.\n",
+                 u8fmt::wrapU8string(icons::kNote));
+
+    pw_main_loop_run(current_state.main_loop.get());
+}
+
+void BeatDetector::stop() noexcept {
+    auto& current_state = *impl_->state;
+    DetectorState::quit.store(true, std::memory_order_relaxed);
+    if (current_state.main_loop != nullptr) {
+        pw_main_loop_quit(current_state.main_loop.get());
+    }
+}
+
+void BeatDetector::signalHandler(int) noexcept {
+    if (DetectorState::instance != nullptr) {
+        beat::DetectorState::quit.store(true, std::memory_order_relaxed);
+    }
+}
+
+}  // namespace beat
