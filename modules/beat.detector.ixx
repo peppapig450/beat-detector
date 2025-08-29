@@ -9,7 +9,7 @@ export module beat.detector;
 export import :aubio_raii;
 export import :pw_raii;
 
-namespace beat {
+export namespace beat {
 
 class BeatDetector {
 public:
