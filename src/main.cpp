@@ -1,21 +1,43 @@
 import beat.detector;
 
+#include <cctype>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <iostream>
 #include <limits>
 #include <print>
 #include <ranges>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
 namespace {
+namespace detail {
 
-constexpr std::uint32_t kDefaultBufferSize = 512U;
+[[nodiscard]] auto programName(std::span<std::string_view> args) -> std::string {
+    if (args.empty()) {
+        return "beat_cli";
+    }
+
+    namespace fs = std::filesystem;
+    return fs::path(args.front()).filename().string();
+}
+
+void printUsage(std::string_view argv0) {
+    std::println(" Beat Detector Usage:");
+    std::println(" {} [buffer_size] [options]\n", argv0);
+    std::println("Options:");
+    std::println("\t--no-log\t\t\tDisable logging to file");
+    std::println("\t--no-stats\t\t\tDisable performance statistics");
+    std::println("\t--pitch\t\t\tEnable pitch detection");
+    std::println("\t--no-visual\t\t\tDisable visual feedback");
+    std::println("\t--help,-h\t\t\tShow this help\n");
+}
 
 // Parses a base-10 unsigned integer from a string_view with overflow checks.
 // Returns {value, nullptr} on success, {0, "msg"} on failure.
@@ -47,9 +69,12 @@ static auto parseU32(std::string_view input) -> std::pair<std::uint32_t, const c
     return {parsed_value, nullptr};
 }
 
+}  // namespace detail
 }  // namespace
 
 namespace beat_detector {
+
+constexpr std::uint32_t kDefaultBufferSize = 512U;
 
 struct Options {
     std::uint32_t buffer_size {kDefaultBufferSize};
@@ -61,26 +86,6 @@ struct Options {
 
 constexpr std::uint32_t kMinBufferSize = 64U;
 constexpr std::uint32_t kMaxBufferSize = 8192U;
-
-[[nodiscard]] static auto programName(std::span<std::string_view> args) -> std::string {
-    if (args.empty()) {
-        return "beat_cli";
-    }
-
-    namespace fs = std::filesystem;
-    return fs::path(args.front()).filename().string();
-}
-
-static void printUsage(std::string_view argv0) {
-    std::println(" Beat Detector Usage:");
-    std::println(" {} [buffer_size] [options]\n", argv0);
-    std::println("Options:");
-    std::println("\t--no-log\t\t\tDisable logging to file");
-    std::println("\t--no-stats\t\t\tDisable performance statistics");
-    std::println("\t--pitch\t\t\tEnable pitch detection");
-    std::println("\t--no-visual\t\t\tDisable visual feedback");
-    std::println("\t--help,-h\t\t\tShow this help\n");
-}
 
 struct ParseError {
     enum class Kind : std::uint8_t { Help, Invalid } kind {Kind::Invalid};
@@ -110,7 +115,7 @@ struct ParseError {
 
             saw_positional = true;
 
-            auto [end_ptr, parse_err] = parseU32(arg);
+            auto [end_ptr, parse_err] = detail::parseU32(arg);
 
             if (parse_err != nullptr) {
                 return std::unexpected {
@@ -153,17 +158,17 @@ auto main(int argc, char* argv[]) -> int {
         args.emplace_back(raw_string);
     }
 
-    const auto program_name = beat_detector::programName(args);
+    const auto program_name = detail::programName(args);
 
     const auto parsed = beat_detector::parseArgs(args);
     if (!parsed) {
         if (parsed.error().kind == beat_detector::ParseError::Kind::Help) {
-            beat_detector::printUsage(program_name);
+            detail::printUsage(program_name);
             return 0;
         }
 
         std::println(std::cerr, "{}", parsed.error().message);
-        beat_detector::printUsage(program_name);
+        detail::printUsage(program_name);
         return 1;
     }
 
