@@ -239,6 +239,8 @@ BeatDetector::~BeatDetector() {
     if (current_state.log.is_open()) {
         current_state.log.close();
     }
+
+    impl_->state.reset();
     pw_deinit();
     std::println("\n{} Cleanup complete - All resources freed!",
                  u8fmt::wrapU8string(icons::kCheck));
