@@ -368,14 +368,8 @@ auto BeatDetector::initialize() -> std::expected<void, std::string> {
                     using Clock = std::chrono::steady_clock;
 
                     auto* process_state = static_cast<DetectorState*>(userdata);
-                    if (process_state == nullptr) {
-                        return;
-                    }
-
-                    if (DetectorState::instance != nullptr) {
-                        beat::DetectorState::quit.store(false, std::memory_order_relaxed);
-                    }
-                    if (beat::DetectorState::quit.load(std::memory_order_relaxed)) {
+                    if (process_state == nullptr
+                        || beat::DetectorState::quit.load(std::memory_order_relaxed)) {
                         return;
                     }
 
@@ -572,6 +566,8 @@ void BeatDetector::run() {
         return;
     }
 
+    DetectorState::quit.store(false, std::memory_order_relaxed);
+
     std::println("\n{} Beat Detector Started!", u8fmt::wrapU8string(icons::kBpm));
     std::println("\t Buffer size: {} samples", current_state.buffer_size);
     std::println("\tSample rate: {} Hz", kSampleRate);
@@ -599,6 +595,10 @@ void BeatDetector::stop() noexcept {
 void BeatDetector::signalHandler(int) noexcept {
     if (DetectorState::instance != nullptr) {
         beat::DetectorState::quit.store(true, std::memory_order_relaxed);
+
+        if (DetectorState::instance->main_loop != nullptr) {
+            pw_main_loop_quit(DetectorState::instance->main_loop.get());
+        }
     }
 }
 
