@@ -10,6 +10,42 @@
                 "CMAKE_C_COMPILER": "/usr/lib/llvm/21/bin/clang",
                 "CMAKE_CXX_COMPILER": "/usr/lib/llvm/21/bin/clang++"
             }
+        },
+        {
+            "name": "clang21-asan",
+            "displayName": "Clang 21 + ASan (Debug)",
+            "inherits": "clang21",
+            "binaryDir": "${sourceDir}/build/clang21-asan",
+            "toolchainFile": "${sourceDir}/cmake/toolchains/asan.cmake",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+            }
+        },
+        {
+            "name": "clang21-tsan",
+            "displayName": "Clang 21 + TSan (Debug)",
+            "inherits": "clang21",
+            "binaryDir": "${sourceDir}/build/clang21-tsan",
+            "toolchainFile": "${sourceDir}/cmake/toolchains/tsan.cmake",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "clang21",
+            "configurePreset": "clang21"
+        },
+        {
+            "name": "clang21-asan",
+            "configurePreset": "clang21-asan"
+        },
+        {
+            "name": "clang21-tsan",
+            "configurePreset": "clang21-tsan"
         }
     ]
 }

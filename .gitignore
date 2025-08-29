@@ -63,4 +63,4 @@ out/
 *.cmake
 
 # Keep manually written cmake scripts
-!cmake/*.cmake
+!cmake/*/*.cmake
