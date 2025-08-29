@@ -1,14 +1,17 @@
 import beat.detector;
 
 #include <csignal>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <iostream>
 #include <limits>
 #include <print>
+#include <ranges>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -59,7 +62,7 @@ struct Options {
 constexpr std::uint32_t kMinBufferSize = 64U;
 constexpr std::uint32_t kMaxBufferSize = 8192U;
 
-[[nodiscard]] static auto programName(std::span<char* const> args) -> std::string {
+[[nodiscard]] static auto programName(std::span<std::string_view> args) -> std::string {
     if (args.empty()) {
         return "beat_cli";
     }
@@ -84,14 +87,14 @@ struct ParseError {
     std::string message;
 };
 
-[[nodiscard]] static auto parseArgs(std::span<char* const> args)
+[[nodiscard]] static auto parseArgs(std::span<std::string_view> args)
     -> std::expected<Options, ParseError> {
     Options options {};
     bool    saw_positional = false;
 
     // Skip program name (args[0]) if present
     for (std::size_t i = args.size() > 0U ? 1U : 0U; i < args.size(); ++i) {
-        std::string_view arg {args[i]};
+        std::string_view arg = args[i];
         using enum ParseError::Kind;
 
         if (arg == "--help" || arg == "-h") {
@@ -142,8 +145,15 @@ struct ParseError {
 auto main(int argc, char* argv[]) -> int {
     using beat::BeatDetector;
 
-    std::span<char* const> args {argv, static_cast<std::size_t>(argc)};
-    const auto             program_name = beat_detector::programName(args);
+    auto raw_args = std::views::counted(argv, static_cast<std::ptrdiff_t>(argc));
+
+    std::vector<std::string_view> args;
+    args.reserve(static_cast<std::size_t>(argc));
+    for (char* raw_string : raw_args) {
+        args.emplace_back(raw_string);
+    }
+
+    const auto program_name = beat_detector::programName(args);
 
     const auto parsed = beat_detector::parseArgs(args);
     if (!parsed) {
