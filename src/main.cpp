@@ -32,11 +32,18 @@ void printUsage(std::string_view argv0) {
     std::println(" Beat Detector Usage:");
     std::println(" {} [buffer_size] [options]\n", argv0);
     std::println("Options:");
-    std::println("\t--no-log\t\t\tDisable logging to file");
-    std::println("\t--no-stats\t\t\tDisable performance statistics");
-    std::println("\t--pitch\t\t\tEnable pitch detection");
-    std::println("\t--no-visual\t\t\tDisable visual feedback");
-    std::println("\t--help,-h\t\t\tShow this help\n");
+
+    constexpr int col_width = 16;
+    auto          print_opt  = [&](std::string_view option, std::string_view description) -> void {
+        std::println("  {:<{}}{}", option, col_width, description);
+    };
+
+    print_opt("--no-log", "Disable logging to file");
+    print_opt("--no-stats", "Disable performance statistics");
+    print_opt("--pitch", "Enable pitch detection");
+    print_opt("--no-visual", "Disable visual feedback");
+    print_opt("--help, -h", "Show this help");
+    std::println("");
 }
 
 // Parses a base-10 unsigned integer from a string_view with overflow checks.
@@ -110,7 +117,7 @@ struct ParseError {
             if (saw_positional) {
                 return std::unexpected(ParseError {.kind    = Invalid,
                                                    .message = "Too many positional arguments (only "
-                                                              "buffer_size is allowed)/"});
+                                                              "buffer_size is allowed)"});
             }
 
             saw_positional = true;
