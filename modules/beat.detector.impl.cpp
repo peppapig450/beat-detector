@@ -374,7 +374,7 @@ auto BeatDetector::initialize() -> std::expected<void, std::string> {
         aubio_pitch_set_unit(current_state.pitch.get(), "Hz");
     }
 
-    const pw_stream_events
+    static const pw_stream_events
         events {.version = PW_VERSION_STREAM_EVENTS,  // behave clang-format
                 .destroy = +[](void* userdata) noexcept -> void {
                     auto* state = static_cast<DetectorState*>(userdata);
@@ -430,8 +430,6 @@ auto BeatDetector::initialize() -> std::expected<void, std::string> {
                         || beat::DetectorState::quit.load(std::memory_order_relaxed)) {
                         return;
                     }
-
-                    const auto starting_time = Clock::now();
 
                     if (auto* pw_buf = pw_stream_dequeue_buffer(process_state->stream.get());
                         pw_buf) {
