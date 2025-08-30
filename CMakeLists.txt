@@ -45,6 +45,7 @@ function(setup_warnings target)
   elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
     target_compile_options(${target} PRIVATE
       -Weverything
+      -Wno-c99-extensions
       -Wno-c++98-compat
       -Wno-c++98-compat-pedantic
       -Wno-padded
