@@ -1,9 +1,10 @@
-#pragma once
-
+module;
 #include <format>
 #include <string_view>
 
-namespace u8fmt {
+export module u8fmt;
+
+export namespace u8fmt {
 /// Wrapper type so we can legally specialize std::formatter
 /// for a u8string_view-like object.
 struct U8StringViewWrapper {
@@ -18,7 +19,7 @@ constexpr auto wrapU8string(std::u8string_view input) noexcept -> U8StringViewWr
 }  // namespace u8fmt
 
 // std::formatter specialization must be declared in namespace std
-template <> struct std::formatter<u8fmt::U8StringViewWrapper, char> {
+export template <> struct std::formatter<u8fmt::U8StringViewWrapper, char> {
     // Only "{}" is supported, ignore custom format specifiers for now.
     constexpr auto parse(std::format_parse_context& parse_context)
         -> decltype(parse_context.begin()) {

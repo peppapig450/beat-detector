@@ -93,7 +93,6 @@ if(BUILD_LIBRARY)
   add_library(beat_detector SHARED ${IMPL_SRCS})
 
   # Our own headers (non-system) + external deps (system)
-  target_include_directories(beat_detector PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_include_directories(beat_detector SYSTEM PRIVATE
     ${PIPEWIRE_INCLUDE_DIRS}
     ${AUBIO_INCLUDE_DIRS}
@@ -119,6 +118,7 @@ if(BUILD_LIBRARY)
         FILE_SET cxx_modules TYPE CXX_MODULES 
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
+          modules/u8fmt.cppm
           modules/audio.blocks.cppm
           modules/audio.blocks.spa.cppm
           modules/audio.blocks.core.cppm
@@ -149,14 +149,11 @@ if(BUILD_CLI)
   if(BUILD_LIBRARY)
     add_executable(beat_cli ${MAIN_SRC})
     target_link_libraries(beat_cli PRIVATE beat_detector PkgConfig::PIPEWIRE PkgConfig::AUBIO)
-    target_include_directories(beat_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
     setup_warnings(beat_cli)
   else()
     # No library: compile implementation into the CLI directly
     add_executable(beat_cli ${IMPL_SRCS} ${MAIN_SRC})
     target_include_directories(beat_cli
-      PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
       SYSTEM PRIVATE
         ${PIPEWIRE_INCLUDE_DIRS}
         ${AUBIO_INCLUDE_DIRS}
@@ -177,9 +174,6 @@ if(CLANG_FORMAT_EXE)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/*.hh
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/*.ixx
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/*.cppm
   )
