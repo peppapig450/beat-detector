@@ -40,8 +40,8 @@ module beat.detector;
 import :aubio_raii;
 import :pw_raii;
 import audio.blocks;
-import u8fmt;
-import icons;
+import support.u8fmt;
+import support.icons;
 
 using namespace pw_raii;
 using namespace aubio_raii;

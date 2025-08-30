@@ -1,12 +1,11 @@
 module;
 #include <pipewire/stream.h>
 
-#include <print>
 #include <string_view>
 
-export module icons;
+export module support.icons;
 
-import u8fmt;
+import support.u8fmt;
 
 export namespace icons {
 

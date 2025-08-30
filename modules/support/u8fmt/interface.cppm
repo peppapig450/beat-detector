@@ -2,7 +2,7 @@ module;
 #include <format>
 #include <string_view>
 
-export module u8fmt;
+export module support.u8fmt;
 
 export namespace u8fmt {
 /// Wrapper type so we can legally specialize std::formatter
