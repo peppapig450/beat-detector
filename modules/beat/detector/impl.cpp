@@ -41,6 +41,7 @@ import :aubio_raii;
 import :pw_raii;
 import audio.blocks;
 import u8fmt;
+import icons;
 
 using namespace pw_raii;
 using namespace aubio_raii;
@@ -52,28 +53,6 @@ namespace {
 constexpr std::uint32_t kSampleRate = 44100U;  // REVIEW: Configurable?
 constexpr std::uint32_t kChannels   = 1U;
 
-namespace icons {
-
-constexpr std::u8string_view kStats   = u8"\U0000E64d";  // 
-constexpr std::u8string_view kRuntime = u8"\U0001F3EB";  // 󱎫
-constexpr std::u8string_view kNote    = u8"\uf025";      // 
-
-constexpr std::u8string_view kBolt      = u8"\u26A1";      // ⚡
-constexpr std::u8string_view kUpChart   = u8"\U0001F4C8";  // 📈
-constexpr std::u8string_view kDownChart = u8"\U0001F4C9";  // 📉
-
-constexpr std::u8string_view kBpm    = u8"\uf75a";  // 󰝚
-constexpr std::u8string_view kCheck  = u8"\uf14a";  // 
-constexpr std::u8string_view kCircle = u8"\ueaaf";  // 
-constexpr std::u8string_view kFail   = u8"\uf467";  // 
-
-constexpr std::u8string_view kMusic = u8"\uf001";  // 
-constexpr std::u8string_view kBlock = u8"\u2588";  // █
-constexpr std::u8string_view kLight = u8"\u2591";  // ░
-
-constexpr std::u8string_view kPitch = u8"\U000F05C5";  // 󰗅
-}  // namespace icons
-
 void featureLine(std::string_view label, bool enabled, std::u8string_view icon) {
     auto u8_icon = u8fmt::wrapU8string(icon);
     std::print("\t{} {}: {}\n",
@@ -81,25 +60,6 @@ void featureLine(std::string_view label, bool enabled, std::u8string_view icon) 
                label,
                enabled ? u8fmt::wrapU8string(icons::kCheck) : u8fmt::wrapU8string(icons::kFail));
 }
-
-namespace pw {
-
-constexpr auto iconFor(pw_stream_state state) noexcept -> u8fmt::U8StringViewWrapper {
-    constexpr auto wrap = u8fmt::wrapU8string;
-
-    // clang-format off
-    switch (state) {
-        case PW_STREAM_STATE_CONNECTING:  return wrap(u8"\U000F0119"); // 󰄙
-        case PW_STREAM_STATE_PAUSED:      return wrap(u8"\uf04c");     // 
-        case PW_STREAM_STATE_STREAMING:   return wrap(u8"\U000F076A"); // 󰝚
-        case PW_STREAM_STATE_ERROR:       return wrap(u8"\uf46f");     // 
-        case PW_STREAM_STATE_UNCONNECTED: return wrap(u8"\uead0");     // 
-        default:                          return wrap(u8"\U000F0453"); // 󰑓
-    }
-    // clang-format on
-}
-
-}  // namespace pw
 
 }  // namespace
 
@@ -393,7 +353,7 @@ auto BeatDetector::initialize() -> std::expected<void, std::string> {
                     auto* event_state = static_cast<DetectorState*>(userdata);
 
                     std::println("{} Stream state: {}",
-                                 pw::iconFor(state),
+                                 icons::pw::iconFor(state),
                                  pw_stream_state_as_string(state));
 
                     if (state == PW_STREAM_STATE_ERROR) {

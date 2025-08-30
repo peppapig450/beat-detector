@@ -119,6 +119,8 @@ if(BUILD_LIBRARY)
         FILES
           modules/u8fmt/interface.cppm
 
+          modules/icons/interface.cppm
+
           modules/audio/blocks/interface.cppm
           modules/audio/blocks/spa.cppm
           modules/audio/blocks/core.cppm
