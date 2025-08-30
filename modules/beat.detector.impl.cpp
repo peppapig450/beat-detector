@@ -6,12 +6,13 @@ module;
 #include <aubio/onset/onset.h>
 #include <aubio/pitch/pitch.h>
 #include <aubio/tempo/tempo.h>
-#include <pipewire/context.h>
 #include <pipewire/core.h>
 #include <pipewire/keys.h>
+#include <pipewire/loop.h>
 #include <pipewire/main-loop.h>
 #include <pipewire/pipewire.h>
 #include <pipewire/port.h>
+#include <pipewire/properties.h>
 #include <pipewire/stream.h>
 #include <spa/param/audio/format.h>
 #include <spa/param/audio/raw-utils.h>
@@ -30,8 +31,9 @@ module;
 #include <numeric>
 #include <print>
 #include <ranges>
-#include <ratio>
+#include <stop_token>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 module beat.detector;
@@ -104,8 +106,6 @@ constexpr auto iconFor(pw_stream_state state) noexcept -> u8fmt::U8StringViewWra
 class DetectorState {
 public:
     pw_raii::MainLoopPtr main_loop {nullptr};
-    pw_raii::ContextPtr  context {nullptr};
-    pw_raii::CorePtr     core {nullptr};
     pw_raii::StreamPtr   stream {nullptr};
 
     aubio_raii::TempoPtr tempo {nullptr};
@@ -131,6 +131,41 @@ public:
 
     static constexpr std::size_t kBPMCapacity = 10U;
 
+    /*
+     * Real-time (RT) -> Mainloop communication
+     *
+     * Implements a lock-free single-producer/single-consumer (SPSC) event queue
+     * to pass analysis results from the real-time audio based thread into the PipeWire mainloop.
+     *
+     * Events are produced in the RT thread (beat/onset detection, BPM, pitch, etc.) and consumed
+     * in the mainloop via a PipeWire loop event source (`event_src`).
+     *
+     * Synchronization uses atomics for head/tail indices: RT pushes to `ev_head`, the mainloop
+     * consumes from `ev_tail`. This avoids locks, which are unsafe in real-time contexts.
+     *
+     * Teardown: `stopping` signals shutdown in progress, and `quit_monitor` observes quit requests
+     * to exit the mainloop without signal-unsafe calls.
+     */
+    struct Event {
+        bool   is_beat;
+        bool   is_onset;
+        float  bpm;
+        float  pitch_hz;
+        double process_ms;
+    };
+
+    static constexpr std::size_t kEventCap = 1024U;
+    std::array<Event, kEventCap> events {};
+    std::atomic<std::size_t>     ev_head {0U};         // write index (Real-time)
+    std::atomic<std::size_t>     ev_tail {0U};         // read index (mainloop)
+    spa_source*                  event_src {nullptr};  // pw_loop_add_event
+
+    // Stop/teardown coordination
+    std::atomic_bool stopping {false};
+
+    // Monitor thread to observe 'quit' and quit mainloop safely (no signal-unsafe calls)
+    std::jthread quit_monitor;
+
     struct BPMBuffer {
         std::array<float, kBPMCapacity> values {};
         std::size_t                     count {0U};
@@ -153,8 +188,21 @@ public:
         , stats_enabled(enable_stats)
         , pitch_enabled(enable_pitch_detection)
         , visual_enabled(enable_visualization) {
-        instance = this;
-        start    = std::chrono::steady_clock::now();
+        instance     = this;
+        start        = std::chrono::steady_clock::now();
+        // Spawn a tiny monitor that quits the mainloop when 'quit' flips
+        quit_monitor = std::jthread([this](const std::stop_token& stop_token) -> void {
+            using namespace std::chrono_literals;
+            while (!stop_token.stop_requested()) {
+                if (DetectorState::quit.load(std::memory_order_relaxed)) {
+                    if (this->main_loop != nullptr) {
+                        pw_main_loop_quit(this->main_loop.get());
+                    }
+                    break;
+                }
+                std::this_thread::sleep_for(50ms);
+            }
+        });
     }
 
     ~DetectorState() {
@@ -292,16 +340,7 @@ auto BeatDetector::initialize() -> std::expected<void, std::string> {
         return std::unexpected("failed to create main loop");
     }
 
-    current_state.context.reset(
-        pw_context_new(pw_main_loop_get_loop(current_state.main_loop.get()), nullptr, 0));
-    if (current_state.context == nullptr) {
-        return std::unexpected("failed to create context");
-    }
-
-    current_state.core.reset(pw_context_connect(current_state.context.get(), nullptr, 0));
-    if (current_state.core == nullptr) {
-        return std::unexpected("failed to connect to PipeWire");
-    }
+    // NOTE: we let pw_stream_new_simple create its own context/core under the hood
 
     current_state.tempo.reset(
         new_aubio_tempo("default", current_state.fft_size, current_state.buffer_size, kSampleRate));
@@ -337,7 +376,14 @@ auto BeatDetector::initialize() -> std::expected<void, std::string> {
 
     const pw_stream_events
         events {.version = PW_VERSION_STREAM_EVENTS,  // behave clang-format
-                .destroy = nullptr,
+                .destroy = +[](void* userdata) noexcept -> void {
+                    auto* state = static_cast<DetectorState*>(userdata);
+                    if (state != nullptr && state->stream != nullptr) {
+                        // The stream is being destroyed by PipeWire right now
+                        // Drop ownership without calling the deleter again
+                        (void) state->stream.release();
+                    }
+                },
 
                 // Force the lambda to decay to a function pointer with +[] (needed for C callback)
                 .state_changed = +[](void* userdata,
@@ -357,6 +403,16 @@ auto BeatDetector::initialize() -> std::expected<void, std::string> {
                                      error ? error : "unknown");
                         if (event_state != nullptr && event_state->main_loop != nullptr) {
                             pw_main_loop_quit(event_state->main_loop.get());
+                        }
+                    }
+
+                    // If we requested stop, disconnect once paused to avoid RT rac
+                    if (state == PW_STREAM_STATE_PAUSED) {
+                        if (event_state != nullptr
+                            && event_state->stopping.load(std::memory_order_relaxed)) {
+                            if (event_state->stream != nullptr) {
+                                pw_stream_disconnect(event_state->stream.get());
+                            }
                         }
                     }
                 },
@@ -423,63 +479,63 @@ auto BeatDetector::initialize() -> std::expected<void, std::string> {
                                         pitch_hz = process_state->pitch_buffer->data[0];
                                     }
 
+                                    // Real-time only bookkeeping
+                                    bool  produced_event = false;
+                                    float bpm_now        = process_state->last_bpm;
+
                                     if (is_beat) {
                                         ++process_state->total_beats;
-                                        process_state->last_bpm =
-                                            aubio_tempo_get_bpm(process_state->tempo.get());
+
+                                        bpm_now = aubio_tempo_get_bpm(process_state->tempo.get());
+                                        process_state->last_bpm  = bpm_now;
                                         process_state->last_beat = Clock::now();
 
-                                        auto& bpm_buffer = process_state->bpm;
-                                        bpm_buffer.values[bpm_buffer.head] =
-                                            process_state->last_bpm;
+                                        auto& bpm_buffer                   = process_state->bpm;
+                                        bpm_buffer.values[bpm_buffer.head] = bpm_now;
                                         bpm_buffer.head =
                                             (bpm_buffer.head + 1) % DetectorState::kBPMCapacity;
                                         bpm_buffer.count = std::min(bpm_buffer.count + 1,
                                                                     DetectorState::kBPMCapacity);
 
-                                        if (process_state->visual_enabled) {
-                                            const auto intensity =
-                                                std::clamp(static_cast<int>(process_state->last_bpm
-                                                                            / 20.0F),
-                                                           0,
-                                                           10);
-                                            std::print("\r{}", u8fmt::wrapU8string(icons::kMusic));
-                                            for (int i = 0; i < intensity; ++i) {
-                                                std::print("{}",
-                                                           u8fmt::wrapU8string(icons::kBlock));
-                                            }
-                                            for (int i = 0; i < 10; ++i) {
-                                                std::print("{}",
-                                                           u8fmt::wrapU8string(icons::kLight));
-                                            }
-                                            std::print(" BPM: {:.1f} | Avg {:.1f}",
-                                                       process_state->last_bpm,
-                                                       averageBpm(*process_state));
-                                            std::fflush(stdout);
-                                        } else {
-                                            std::println(" BPM: {:.1f}", process_state->last_bpm);
-                                        }
+                                        produced_event = true;
                                     }
 
                                     if (is_onset) {
                                         ++process_state->total_onsets;
+                                        produced_event = true;
                                     }
 
-                                    if (process_state->log_enabled && process_state->log.is_open()
-                                        && (is_beat || is_onset)) {
-                                        const auto current_time = std::chrono::system_clock::now();
-                                        const auto current_time_ms =
-                                            std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                current_time.time_since_epoch())
-                                            % 1000;
+                                    if (produced_event) {
+                                        // Push to the SPSC ring buffer, overwriting the oldest if
+                                        // full
+                                        const auto head =
+                                            process_state->ev_head.load(std::memory_order_relaxed);
+                                        const auto tail =
+                                            process_state->ev_tail.load(std::memory_order_acquire);
 
-                                        std::println(process_state->log,
-                                                     "{:%T}.{:03},{:.1f},{},{:.3f},",
-                                                     current_time,
-                                                     static_cast<int>(current_time_ms.count()),
-                                                     (is_beat ? process_state->last_bpm : 0.0F),
-                                                     is_onset ? 1 : 0,
-                                                     pitch_hz);
+                                        auto next_head = (head + 1) % DetectorState::kEventCap;
+                                        // Drop the oldest if full
+                                        if (next_head == tail) {
+                                            process_state->ev_tail
+                                                .store((tail + 1) % DetectorState::kEventCap,
+                                                       std::memory_order_release);
+                                        }
+
+                                        process_state->events[head] = DetectorState::Event {
+                                            .is_beat    = is_beat,
+                                            .is_onset   = is_onset,
+                                            .bpm        = bpm_now,
+                                            .pitch_hz   = pitch_hz,
+                                            .process_ms = 0.0  // this is filled later
+                                        };
+                                        process_state->ev_head.store(next_head,
+                                                                     std::memory_order_release);
+                                        if (process_state->event_src != nullptr) {
+                                            auto* main_loop = pw_main_loop_get_loop(
+                                                process_state->main_loop.get());
+                                            pw_loop_signal_event(main_loop,
+                                                                 process_state->event_src);
+                                        }
                                     }
                                 }
                                 return {};  // success
@@ -500,40 +556,31 @@ auto BeatDetector::initialize() -> std::expected<void, std::string> {
                                     });
                         }
                     }
-
-                    if (process_state->stats_enabled) {
-                        const auto   end_time = Clock::now();
-                        const double end_time_ms =
-                            std::chrono::duration<double, std::milli>(end_time - starting_time)
-                                .count();
-
-                        if (process_state->log.is_open()
-                            && (process_state->total_beats || process_state->total_onsets)) {
-                            std::println(process_state->log, "{:.3f}", end_time_ms);
-                        }
-
-                        if (process_state->processing_times_ms.size() < 1000) {
-                            process_state->processing_times_ms.push_back(end_time_ms);
-                        }
-                    }
                 },
 
                 .drained      = nullptr,
                 .command      = nullptr,
                 .trigger_done = nullptr};
 
-    auto properties = pw_raii::makeAudioCaptureProperties();
+    auto  properties     = pw_raii::makeAudioCaptureProperties();
+    auto* raw_properties = properties.release();  // ownership passed to PipeWire on success
 
-    current_state.stream.reset(
-        pw_stream_new_simple(pw_main_loop_get_loop(current_state.main_loop.get()),
-                             "beat-detector",
-                             properties.get(),
-                             &events,
-                             &current_state));
+    auto* raw_stream = pw_stream_new_simple(pw_main_loop_get_loop(current_state.main_loop.get()),
+                                            "beat-detector",
+                                            raw_properties,  // ownership passed to PipeWire
+                                            &events,
+                                            &current_state);
 
-    if (current_state.stream == nullptr) {
-        return std::unexpected("failed to create stream");
+    if (raw_stream == nullptr) {
+        // Creation failed: free properties (we released ownership earlier)
+        if (raw_properties != nullptr) {
+            pw_properties_free(raw_properties);
+        }
+        return std::unexpected("failed to  create stream");
     }
+
+    // On success we keep the stream and let PipeWire own the properties
+    current_state.stream.reset(raw_stream);
 
     std::array<std::uint8_t, 1024> buffer {};
     spa_pod_builder                builder = SPA_POD_BUILDER_INIT(buffer.data(), buffer.size());
@@ -556,8 +603,74 @@ auto BeatDetector::initialize() -> std::expected<void, std::string> {
                           params.data(),
                           params.size())
         < 0) {
+        // If the connect fails we destroy the stream to avoid leaking it
+        current_state.stream.reset();
         return std::unexpected("failed to connect to stream");
     }
+
+    // Create a mainloop event to drain the real-time events and perform IO safely
+    current_state.event_src = pw_loop_add_event(
+        pw_main_loop_get_loop(current_state.main_loop.get()),
+        +[](void* userdata, std::uint64_t /*count*/) -> void {
+            auto* state = static_cast<DetectorState*>(userdata);
+            if (state == nullptr) {
+                return;
+            }
+
+            // Drain the SPSC
+            for (;;) {
+                const auto tail = state->ev_tail.load(std::memory_order_acquire);
+                const auto head = state->ev_head.load(std::memory_order_acquire);
+                // Break if empty
+                if (tail == head) {
+                    break;
+                }
+
+                const auto event = state->events[tail];
+                state->ev_tail.store((tail + 1) % DetectorState::kEventCap,
+                                     std::memory_order_release);
+
+                // Stats accumulation (mainloop side)
+                // Per-event timing does not exist (yet?)
+                if (event.is_beat) {
+                    if (state->visual_enabled) {
+                        const auto intensity =
+                            std::clamp(static_cast<int>(event.bpm / 20.0F), 0, 10);
+                        std::print("\r{}", u8fmt::wrapU8string(icons::kMusic));
+
+                        for (int i = 0; i < intensity; ++i) {
+                            std::print("{}", u8fmt::wrapU8string(icons::kBlock));
+                        }
+
+                        for (int i = 0; i < 10; ++i) {
+                            std::print("{}", u8fmt::wrapU8string(icons::kLight));
+                        }
+
+                        std::print(" BPM: {:.1f} | Avg {:.1f}", event.bpm, averageBpm(*state));
+                        std::fflush(stdout);
+                    } else {
+                        std::println(" BPM: {:.1f}", event.bpm);
+                    }
+                }
+
+                if (state->log_enabled && state->log.is_open()
+                    && (event.is_beat || event.is_onset)) {
+                    const auto current_time = std::chrono::system_clock::now();
+                    const auto current_time_ms =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            current_time.time_since_epoch())
+                        % 1000;
+                    std::println(state->log,
+                                 "{:%T}.{:03},{:.1f},{},{:.3f},",
+                                 current_time,
+                                 static_cast<int>(current_time_ms.count()),
+                                 (event.is_beat ? event.bpm : 0.0F),
+                                 event.is_onset ? 1 : 0,
+                                 event.pitch_hz);
+                }
+            }
+        },
+        &current_state);
 
     return {};
 }
@@ -589,18 +702,19 @@ void BeatDetector::run() {
 void BeatDetector::stop() noexcept {
     auto& current_state = *impl_->state;
     DetectorState::quit.store(true, std::memory_order_relaxed);
-    if (current_state.main_loop != nullptr) {
-        pw_main_loop_quit(current_state.main_loop.get());
+
+    if (current_state.stream != nullptr) {
+        // Step 1: ask PipeWire to stop scheduling .process
+        current_state.stopping.store(true, std::memory_order_relaxed);
+        pw_stream_set_active(current_state.stream.get(), false);
+        // Step 2: in state_changed(PAUSED) we will pw_stream_disconnect()
     }
 }
 
 void BeatDetector::signalHandler(int) noexcept {
     if (DetectorState::instance != nullptr) {
+        // Async-signal safe: only set the flag
         beat::DetectorState::quit.store(true, std::memory_order_relaxed);
-
-        if (DetectorState::instance->main_loop != nullptr) {
-            pw_main_loop_quit(DetectorState::instance->main_loop.get());
-        }
     }
 }
 
