@@ -120,6 +120,7 @@ if(BUILD_LIBRARY)
         FILES
           modules/support/u8fmt/interface.cppm
           modules/support/icons/interface.cppm
+          modules/support/icons/pw.cppm
 
           modules/audio/blocks/interface.cppm
           modules/audio/blocks/spa.cppm
