@@ -117,9 +117,8 @@ if(BUILD_LIBRARY)
         FILE_SET cxx_modules TYPE CXX_MODULES 
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
-          modules/u8fmt/interface.cppm
-
-          modules/icons/interface.cppm
+          modules/support/u8fmt/interface.cppm
+          modules/support/icons/interface.cppm
 
           modules/audio/blocks/interface.cppm
           modules/audio/blocks/spa.cppm
