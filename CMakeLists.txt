@@ -34,8 +34,7 @@ pkg_check_modules(AUBIO    REQUIRED IMPORTED_TARGET aubio)
 
 # --- Sources ---
 set(IMPL_SRCS
-  modules/beat.detector.impl.cpp
-  # 'src/pw_audio_raii.hpp' is header-only, not compiled directly
+  modules/beat/detector/impl.cpp
 )
 set(MAIN_SRC src/main.cpp)
 
@@ -118,13 +117,15 @@ if(BUILD_LIBRARY)
         FILE_SET cxx_modules TYPE CXX_MODULES 
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
-          modules/u8fmt.cppm
-          modules/audio.blocks.cppm
-          modules/audio.blocks.spa.cppm
-          modules/audio.blocks.core.cppm
-          modules/beat.detector.aubio_raii.cppm
-          modules/beat.detector.cppm
-          modules/beat.detector.pw_raii.cppm
+          modules/u8fmt/interface.cppm
+
+          modules/audio/blocks/interface.cppm
+          modules/audio/blocks/spa.cppm
+          modules/audio/blocks/core.cppm
+
+          modules/beat/detector/aubio_raii.cppm
+          modules/beat/detector/interface.cppm
+          modules/beat/detector/pw_raii.cppm
     )
     # If you discover a toolchain that needs TS flags, uncomment as needed:
     # if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
