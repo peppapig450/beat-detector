@@ -1,5 +1,4 @@
 module;
-#include "../include/utf8_format.hpp"
 #include <aubio/types.h>
 
 #include <aubio/fvec.h>
@@ -41,6 +40,7 @@ module beat.detector;
 import :aubio_raii;
 import :pw_raii;
 import audio.blocks;
+import u8fmt;
 
 using namespace pw_raii;
 using namespace aubio_raii;

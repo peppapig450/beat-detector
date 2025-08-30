@@ -1,9 +1,10 @@
-#pragma once
-
+module;
 #include <format>
 #include <string_view>
 
-namespace u8fmt {
+export module u8fmt;
+
+export namespace u8fmt {
 /// Wrapper type so we can legally specialize std::formatter
 /// for a u8string_view-like object.
 struct U8StringViewWrapper {
